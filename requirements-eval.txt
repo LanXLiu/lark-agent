@@ -1,0 +1,6 @@
+# 评估依赖（只在跑 evaluation/ 时需要，不影响机器人运行）
+# 安装：pip install -r requirements-eval.txt
+ragas>=0.2.0
+datasets>=2.16.0
+langchain-openai>=0.2.0
+pandas>=2.0.0
