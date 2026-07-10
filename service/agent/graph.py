@@ -28,6 +28,7 @@ from langgraph.graph import END, START, StateGraph
 
 from loguru import logger
 
+from prompts.agent import AGENT_SYSTEM_PROMPT, build_web_fallback_user, WEB_FALLBACK_SYSTEM_PROMPT
 from recall.schemas import RecallHit
 from service.agent.tools.base import ToolContext
 from service.agent.tools import registry
@@ -36,23 +37,6 @@ from service.memory import AnswerContext
 from service.qa_service import NO_RECALL_REPLY, QaAnswer, _is_no_answer
 
 DEFAULT_MAX_TOOL_ROUNDS = 4
-
-AGENT_SYSTEM_PROMPT = (
-    "你是企业知识库问答助手。你可以调用工具检索知识库来回答用户问题。\n"
-    "原则：\n"
-    "1. 先判断用户意图：若是打招呼、闲聊、问你是谁 / 你能做什么等与知识库无关的内容，"
-    "**不要调用任何工具**，直接友好、简短地回答即可；只有涉及公司制度、流程、政策、"
-    "项目、会议、任务等知识类问题，才调用 search_knowledge 检索。\n"
-    "2. 一条消息里若既有闲聊又有知识问题，就对知识部分调工具检索、对闲聊部分直接回应，"
-    "综合成一条自然的回答。\n"
-    "3. 检索类问题依据检索到的片段回答，不要凭空编造。若首次检索结果明显不相关，可换用"
-    "更精确的关键词再检索一次；但**不要追求完美**——只要检索到的片段与问题相关、足以"
-    "组织出答案，就应立即基于现有内容作答，不要反复检索。通常检索 1-2 次即可。\n"
-    "4. 涉及'最新''本月''最近'等相对时间，先调用 get_current_time 获得时间基准。\n"
-    "5. 只有当检索结果确实与问题无关、完全无法回答时，才如实说明没有检索到相关内容；"
-    "**如果检索到了相关片段，即使不够完整，也要基于这些片段尽力作答，而不是回复没找到**。\n"
-    "6. 回答要条理清晰、简洁，综合所有相关片段，不要遗漏。"
-)
 
 
 class AgentState(TypedDict, total=False):
@@ -228,12 +212,8 @@ class AgentService:
     def _generate_from_web(self, question: str, web_text: str) -> str:
         """基于联网结果生成答案。措辞上明确「公司知识库未找到、以下据公开资料」，
         划清「非公司内部规定」的边界，避免联网结果冒充公司知识。"""
-        system = (
-            "你是企业知识库助手。企业知识库中没有找到相关内容，以下是联网搜索到的公开资料。"
-            "请基于这些公开资料回答用户问题，并在开头明确说明「公司知识库未找到相关内容，"
-            "以下依据公开资料整理」。不要把公开资料表述成公司内部规定。"
-        )
-        user = f"用户问题：{question}\n\n联网搜索结果：\n{web_text}\n\n请作答："
+        system = WEB_FALLBACK_SYSTEM_PROMPT
+        user = build_web_fallback_user(question, web_text)
         try:
             msg = self.llm.chat(messages=[
                 {"role": "system", "content": system},

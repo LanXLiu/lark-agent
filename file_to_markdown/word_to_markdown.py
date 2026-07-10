@@ -19,6 +19,8 @@ import shutil
 from typing import Optional, Dict, List, Tuple
 import traceback
 
+from prompts.vlm import WORD_IMAGE_PROMPT
+
 # 同包内相对导入（本仓库无 ``utils.file_to_markdown`` 包名）
 from .html_to_markdown import HtmlToMarkdownConverter
 from .image_to_markdown import (
@@ -27,24 +29,7 @@ from .image_to_markdown import (
 )
 
 
-_VLM_WORD_PROMPT = (
-    "你是一位严谨的文档抄录员。下面这张图是从一份 Word 文档里抽出来的，"
-    "传统 OCR 已经无法很好地识别。请用 Markdown **忠实**描述这张图的实际内容，"
-    "便于检索切片。\n\n"
-    "硬性规则：\n"
-    "1. 只描述图中**真实存在**的内容，禁止任何总结、推断、点评或背景补充。\n"
-    "2. 按图片类型组织内容：\n"
-    "   - 流程图 / 架构图 / 关系图 → 先用一行斜体描述主干，如 "
-    "`*流程：节点A → 节点B → 节点C*`；若存在分支，再用 `- ` 无序列表逐项列出"
-    "「来源 → 目标 / 标签」。\n"
-    "   - 表格 → 直接用标准 Markdown 表格语法还原。\n"
-    "   - 带文字的截图 / 海报 / 示意图 → 按视觉顺序抄录所有可见文字，可用 `- ` 列表组织。\n"
-    "   - 纯装饰（Logo / 图标 / 无信息图形）→ 仅输出一行：`(装饰图片，无文字内容)`。\n"
-    "3. 严禁出现「图中显示」「本图表达」「综上」「总结：」等导语或元描述；"
-    "也不要写「无法识别」「图片模糊」。\n"
-    "4. 不使用 emoji；不使用 `#` / `##` 等标题；除非原图明显强调，否则避免 `**加粗**`。\n"
-    "5. 输出**不超过 300 字**，纯 Markdown 片段，不要包外层代码块。"
-)
+_VLM_WORD_PROMPT = WORD_IMAGE_PROMPT
 
 
 def _meaningful_char_count(text: str) -> int:

@@ -27,6 +27,13 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Protocol, TYPE_CHECKING
 
+from prompts.memory import (
+    FLUSH_FACTS_SYSTEM,
+    FLUSH_FACTS_USER_TMPL,
+    SUMMARY_SYSTEM_TMPL,
+    SUMMARY_USER_TMPL,
+)
+
 if TYPE_CHECKING:
     from service.memory_store import SQLiteMemoryStore
 
@@ -323,13 +330,8 @@ class ConversationMemory:
             return ""
         try:
             convo = "\n".join(f"用户：{q}\n助手：{a}" for q, a in overflow)
-            system_prompt = (
-                "你是事实提取助手。从下面的对话里抽取「确定的关键事实」——如具体数字、"
-                "日期、名称、结论、用户明确的偏好或决定。只提取对话里真实出现的、"
-                "后续追问可能还会用到的硬信息，不要臆测、不要泛泛而谈。"
-                "每条一行，用「- 」开头；没有可提取的就输出空。只输出事实列表。"
-            )
-            user_prompt = f"对话：\n{convo}\n\n关键事实："
+            system_prompt = FLUSH_FACTS_SYSTEM
+            user_prompt = FLUSH_FACTS_USER_TMPL.format(convo=convo)
             out = (
                 self.summarizer.complete(
                     system_prompt=system_prompt, user_prompt=user_prompt
@@ -356,14 +358,10 @@ class ConversationMemory:
             # 给 LLM 一个直观的字数提示（token 上限按经验约等于 0.75 倍字数），
             # 实际仍以 _truncate_to_tokens 按 token 硬截断为准。
             approx_chars = int(self.summary_max_tokens * 0.75)
-            system_prompt = (
-                "你是对话摘要助手。把下面的对话历史压缩成简洁的中文要点，"
-                "保留用户关心的主题、已确认的关键事实和结论，去掉寒暄和冗余。"
-                "如果提供了「必须保留的关键事实」，务必逐条并入摘要、不得遗漏。"
-                "如果已有摘要，请把新内容融合进去，输出一份更新后的完整摘要，"
-                f"总长度控制在 {approx_chars} 字以内。只输出摘要正文。"
+            system_prompt = SUMMARY_SYSTEM_TMPL.format(approx_chars=approx_chars)
+            user_prompt = SUMMARY_USER_TMPL.format(
+                prev=prev, facts_block=facts_block, convo=convo
             )
-            user_prompt = f"{prev}{facts_block}新增对话：\n{convo}\n\n更新后的摘要："
             out = (
                 self.summarizer.complete(
                     system_prompt=system_prompt, user_prompt=user_prompt

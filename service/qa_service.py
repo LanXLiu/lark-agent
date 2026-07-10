@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from prompts.qa import QA_ANSWER_REQUIREMENTS, QA_USER_PROMPT_HEADER
 from recall.schemas import RecallHit
 from service.memory import AnswerContext
 
@@ -68,17 +69,12 @@ def build_user_prompt(
         history_section = "对话历史（供理解上下文）：\n" + "\n\n".join(parts) + "\n\n"
 
     return (
-        "请根据以下知识库片段回答用户问题。\n\n"
+        QA_USER_PROMPT_HEADER
         + history_section
         + f"用户问题：{question}\n\n"
         "知识库片段（每段开头是它在文档中的标题路径）：\n"
         + "\n\n".join(context_blocks)
-        + "\n\n回答要求：\n"
-        "1. 所有片段都同等重要，请综合全部相关片段回答，不要只挑其中一段。\n"
-        "2. 如果多个片段是同一主题下的不同部分（例如某结构的 L1/L2/L3… 或多个子项），"
-        "必须把这些部分**全部**完整介绍，不要遗漏。\n"
-        "3. 不要编造知识库没有的信息。\n"
-        "4. 条理清晰、简洁，不要在正文里输出过长的原文引用。"
+        + QA_ANSWER_REQUIREMENTS
     )
 
 
