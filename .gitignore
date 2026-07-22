@@ -3,6 +3,7 @@ __pycache__/
 *.pyo
 *.pyd
 .pytest_cache/
+.pytest_tmp*/
 .mypy_cache/
 .ruff_cache/
 .venv/
@@ -14,17 +15,18 @@ local_packages/
 downloads/
 *.zip
 
-file_to_markdown/temp_word_images/
-orchestrator/metadata/*.jsonl
+knowledge/ingestion/file_to_markdown/temp_word_images/
+knowledge/ingestion/orchestrator/metadata/*.jsonl
 
 .env
 .env.*
 !.env.example
 
 # 本地配置含真实密钥，不入库；用 config_local.yaml.example 作模板
-conf/config_local.yaml
+infrastructure/conf/config_local.yaml
+infrastructure/mcp/*.local.json
 
-# 评估数据/结果含公司真实问答，不入库；仓库只保留 evaluation/testset.example.jsonl
+# 评估数据/结果含公司真实问答，不入库；仓库只保留 knowledge/evaluation/testset.example.jsonl
 eval_data/
 eval_results/
 *.testset.jsonl

@@ -1,7 +1,7 @@
 [project]
-name = "lark-rag"
+name = "lark-agent"
 version = "0.1.0"
-description = "飞书/Lark 知识库 RAG：文档入库 + 机器人问答一体化（进程内直调召回，无 HTTP）"
+description = "Lark Agent: enterprise assistant with knowledge, business data, and web tools"
 license = { text = "MIT" }
 requires-python = ">=3.11"
 dependencies = [
@@ -20,6 +20,9 @@ dependencies = [
     "markitdown>=0.1.1",
     "pymupdf>=1.25.0",
     "httpx>=0.28.0",
+    "redis>=5.0.0",
+    "mcp>=1.23,<2",
+    "beautifulsoup4>=4.14.3",
     "pyyaml>=6.0.2",
     "loguru>=0.7.3",
     "tenacity>=9.0.0",

@@ -1,0 +1,197 @@
+# =============================================================================
+# 本地环境配置（ENV=local 时加载本文件）
+# 说明：扁平键（qdrant_host、minio_endpoint 等）供 infrastructure/model/db 直接读取；
+#       嵌套块便于人工对照，请与扁平键保持一致。
+# ⚠️ 本文件含真实密钥，已被 .gitignore 忽略，请勿提交到仓库。
+# =============================================================================
+
+Log:
+  ErrorPath: logs/error/
+  InfoPath: logs/info/
+
+api_enable_convert: false
+
+# -----------------------------------------------------------------------------
+# Qdrant（控制台：http://<QDRANT_HOST>:6333/dashboard#/welcome ）
+# 未启用 API Key 时留空字符串
+# -----------------------------------------------------------------------------
+qdrant_host: "${QDRANT_HOST:-127.0.0.1}"
+qdrant_port: ${QDRANT_PORT:-6333}
+qdrant_api_key: "${QDRANT_API_KEY:-}"
+qdrant_collection: "${QDRANT_COLLECTION:-knowledgebase}"
+qdrant_vector_size: 1024
+
+# -----------------------------------------------------------------------------
+# MinIO S3 API：默认 9000；Web 控制台 9001（浏览器登录）
+# endpoint 仅填 host:port，不要加 http:// 前缀（代码里会拼接协议）
+# -----------------------------------------------------------------------------
+minio_endpoint: "${MINIO_ENDPOINT:-127.0.0.1:9000}"
+minio_use_ssl: false
+minio_access_key: "${MINIO_ACCESS_KEY}"
+minio_secret_key: "${MINIO_SECRET_KEY}"
+minio_bucket_raw: "knowledge-raw"
+minio_bucket_processed: "knowledge-processed"
+
+# -----------------------------------------------------------------------------
+# LLM / 嵌入（HTTP 客户端；请按实际网关修改，可与下方 MODELS 对齐）
+# llm_base_url 为向量化必填项：须为非空且带 http:// 或 https://（仅 host:port 会由代码补 http://）
+# 空字符串会导致 httpx.UnsupportedProtocol；请改为你的 OpenAI 兼容 /embeddings 网关根路径，如：
+#   Xinference: http://127.0.0.1:9997/v1
+#   Ollama:     http://127.0.0.1:11434/v1
+# -----------------------------------------------------------------------------
+llm_api_key: "${LLM_API_KEY:-}"
+llm_base_url: "${LLM_BASE_URL:-}"
+llm_model: "${LLM_MODEL:-gpt-4o-mini}"
+embedding_model: "text-embedding-v3"
+embedding_dim: 1024
+
+# -----------------------------------------------------------------------------
+# 管线可选配置（chunker / quality / retriever）
+# -----------------------------------------------------------------------------
+chunker:
+  default_strategy: "markdown_structure"
+  strategies:
+    recursive:
+      chunk_size: 512
+      chunk_overlap: 128
+      min_chunk_size: 80
+    semantic:
+      min_chunk_size: 200
+      max_chunk_size: 800
+      buffer_size: 5
+      split_overlap: 48
+    hierarchical:
+      chunk_size: 1000
+      min_chunk_size: 200
+      chunk_overlap: 100
+    markdown_structure:
+      min_chunk_size: 80
+      max_chunk_size: 1500
+      chunk_overlap: 100
+      header_levels: ["#", "##", "###"]
+      table_record_one_chunk: true
+      image_single_chunk_max_chars: 1500
+      ppt_page_max_chars: 1500
+
+quality:
+  min_text_length: 50
+  max_repetition_ratio: 0.6
+  min_meaningful_ratio: 0.3
+
+retriever:
+  hybrid_search:
+    vector_weight: 0.7
+    keyword_weight: 0.3
+
+# -----------------------------------------------------------------------------
+# 召回（knowledge/retrieval/ 包读取；collection 由 API 调用方传入）
+# -----------------------------------------------------------------------------
+recall:
+  default_top_k: 10
+  hybrid_search:
+    prefetch_limit: 20
+  postprocess:
+    max_hits_per_doc: 3
+    min_score: 0.0
+  rerank:
+    enabled: true
+    candidate_top_k: 50
+    # 精排分为 0~1，低于该阈值视为不相关、不返回。
+    # 0.68 基于实测：在库问题 0.73~0.79，不在库 0.60~0.64，卡在分界带。
+    # 知识库内容扩充后建议复测校准。
+    min_score: 0.68
+  # 父子召回：命中某 chunk 时，把同文档同父标题路径(breadcrumb)下的兄弟 chunk 一起带出，
+  # 让问「第四层架构」能返回其下 L1~L5。每个父组最多补 max_siblings 条，防 token 膨胀。
+  parent_child:
+    enabled: true
+    max_siblings: 10
+
+# -----------------------------------------------------------------------------
+# 模型服务（本地路径 / 远程 URL 可按环境切换）
+# -----------------------------------------------------------------------------
+MODELS:
+  # EmbeddingClient 读取 JobEmbed（远程 OpenAI 兼容 /embeddings 接口）。
+  JobEmbed:
+    url: "${BAILIAN_EMBED_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
+    api_key: "${BAILIAN_API_KEY}"
+    model: "${EMBEDDING_MODEL:-text-embedding-v3}"
+    dim: 1024
+    batch_size: 10
+  JobRerank:
+    rerank_url: "${BAILIAN_RERANK_URL:-https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank}"
+    rerank_apikey: "${BAILIAN_API_KEY}"
+    model: "${RERANK_MODEL:-qwen3-vl-rerank}"
+    batch_size: 50
+    instruct: "Given a web search query, retrieve relevant passages that answer the query."
+  # PPT 视觉转换器（pptx_visual_to_markdown.PptxVisualConverter）读取本块：
+  #   url         OpenAI 兼容的 /chat/completions 完整 URL
+  #   api_key     Bearer Token，留空则无法启用视觉版（会回退到 python-pptx 文本版）
+  #   model       VLM 模型 ID
+  #   dpi         PDF → PNG 渲染分辨率（值越高越清晰、越慢；默认 200 足够）
+  #   timeout_sec 单页 VLM 请求超时秒数
+  VLM:
+    url: "${VLM_URL:-https://ark.cn-beijing.volces.com/api/v3/chat/completions}"
+    api_key: "${VLM_API_KEY:-}"
+    model: "${VLM_MODEL:-doubao-1-5-vision-pro-32k-250115}"
+    dpi: 200
+    timeout_sec: 180
+  max_length: 4096
+
+# -----------------------------------------------------------------------------
+# 结构化：MinIO（与 minio_* 扁平键一致；console 为 Web 入口说明）
+# -----------------------------------------------------------------------------
+Minio:
+  endpoint: "${MINIO_ENDPOINT:-127.0.0.1:9000}"
+  console_url: "${MINIO_CONSOLE_URL:-http://127.0.0.1:9001/login}"
+  web_port: 9001
+  api_port: 9000
+  use_ssl: false
+  access_key: "${MINIO_ACCESS_KEY}"
+  secret_key: "${MINIO_SECRET_KEY}"
+  bucket_raw: "knowledge-raw"
+  bucket_processed: "knowledge-processed"
+
+# -----------------------------------------------------------------------------
+# 结构化：Qdrant（与 qdrant_* 扁平键一致）
+# -----------------------------------------------------------------------------
+Qdrant:
+  host: "${QDRANT_HOST:-127.0.0.1}"
+  port: ${QDRANT_PORT:-6333}
+  dashboard_url: "${QDRANT_DASHBOARD_URL:-http://127.0.0.1:6333/dashboard#/welcome}"
+  api_key: "${QDRANT_API_KEY:-}"
+  collection: "${QDRANT_COLLECTION:-knowledgebase}"
+  vector_size: 1024
+  use_ssl: false
+  timeout: 30
+  dense_vector_name: "dense"
+  sparse_vector_name: "bm25"
+  sparse_model: "Qdrant/bm25"
+  point_id_namespace: "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+  default_collection: "${QDRANT_COLLECTION:-knowledgebase}"
+  collections:
+    - "${QDRANT_COLLECTION:-knowledgebase}"
+    - rules
+    - dictionary
+    - cases
+    - exceptions
+    - company
+    - templates
+    - temporary
+  hnsw:
+    m: 16
+    ef_construct: 100
+  hybrid:
+    vector_weight: 0.7
+    keyword_weight: 0.3
+    prefetch_limit: 20
+
+# -----------------------------------------------------------------------------
+# 结构化：Redis（当前仓库 Python 代码未引用，供其它服务或后续扩展）
+# -----------------------------------------------------------------------------
+Redis:
+  host: "${REDIS_HOST:-127.0.0.1}"
+  port: ${REDIS_PORT:-6379}
+  username: "${REDIS_USERNAME:-}"
+  password: "${REDIS_PASSWORD:-}"
+  db: 0
+  header: "knowledge-pipeline"
