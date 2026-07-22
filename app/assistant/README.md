@@ -1,75 +1,74 @@
 # Assistant Runtime
 
-`app/assistant` contains the Lark Agent runtime. It connects channels, conversation memory, runtime skills, tools, and answer formatting. The main orchestration is implemented with LangGraph and Function Calling in `agent/graph.py`.
+`app/assistant` 是 Lark Agent 的运行时模块，连接渠道、对话记忆、运行时 Skill、工具和答案格式化。主编排逻辑位于 `agent/graph.py`，使用 LangGraph 和 Function Calling 实现。
 
-## Files
+## 文件
 
-| Path | Responsibility |
+| 路径 | 职责 |
 | --- | --- |
-| `factory.py` | Runtime assembly entry. Creates the LLM client, retriever, and `AgentService`. |
-| `agent/graph.py` | Agent loop: LLM with tools, tool execution, final answer assembly, web fallback, and tool-round limits. |
-| `agent/tools/` | Tool abstraction, registry, knowledge search, clock, MCP proxies, web search, and business query guards. |
-| `skills/` | Markdown runtime skills and activation logic. Current skill guides business database MCP calls. |
-| `qa_service.py` | Shared answer structure, source formatting, and no-answer helpers. |
-| `memory.py` | Conversation memory windows for rewrite and answer context, with summary support. |
-| `memory_store.py` | Optional SQLite persistence for conversation memory. |
-| `llm_client.py` | Chat client with tool-call support and retry handling. |
-| `prompts/` | System prompts and prompt builders. |
+| `factory.py` | 运行时装配入口，创建 LLM 客户端、检索器和 `AgentService`。 |
+| `agent/graph.py` | Agent 循环：携带 tools 调 LLM、执行工具、组装最终答案、联网降级和工具轮次限制。 |
+| `agent/tools/` | 工具抽象、注册表、知识库检索、时间工具、MCP 代理、网页搜索和业务查询 guard。 |
+| `skills/` | Markdown 运行时 Skill 和激活逻辑；当前 Skill 用于指导业务数据库 MCP 调用。 |
+| `qa_service.py` | 统一回答结构、来源格式化和拒答辅助逻辑。 |
+| `memory.py` | 对话记忆窗口、摘要和上下文构建。 |
+| `memory_store.py` | 可选 SQLite 对话记忆持久化。 |
+| `llm_client.py` | 支持工具调用和重试的聊天客户端。 |
+| `prompts/` | 系统提示词和 prompt 构建函数。 |
 
-## Agent Flow
+## Agent 流程
 
 ```text
-question
-  -> build ToolContext
-  -> attach runtime skill for this turn when activation rules match
-  -> LLM decides whether to call tools
-  -> execute selected tools
-  -> repeat until no tool call or max rounds
-  -> finalize answer and sources
+问题
+  -> 构建 ToolContext
+  -> 命中规则时为本轮附加运行时 Skill
+  -> LLM 判断是否调用工具
+  -> 执行被选中的工具
+  -> 直到没有工具调用或达到轮次上限
+  -> 组装答案和来源
 ```
 
-The assistant does not run a large fixed intent-classification stage before every request. Function Calling handles most routing, while local code controls tool visibility and hard constraints.
+本项目不在每个问题前跑一个大型固定意图分类器。主要路由由 Function Calling 完成，代码侧负责控制工具可见性和硬约束。
 
-## Runtime Skills
+## 运行时 Skill
 
-Runtime skills are Markdown files under `skills/`. They are product behavior guides, not secret configuration.
+运行时 Skill 是 `skills/` 下的 Markdown 文件，属于产品行为说明，不保存任何真实配置。
 
-`skills/business_database_mcp.md` describes how the assistant should prepare before calling business database MCP tools:
+`skills/business_database_mcp.md` 描述调用业务数据库 MCP 前应该如何准备：
 
-- Which user requests are inventory, order, or product lookup workflows.
-- Which fields must be clarified before tool execution.
-- Which identifiers must never be guessed.
-- How to answer after the MCP returns rows.
-- How to handle empty or ambiguous results.
+- 哪些问题属于库存、订单或商品查询。
+- 哪些字段必须在调用工具前问清楚。
+- 哪些标识符不能由模型猜测。
+- MCP 返回 rows 后如何组织回答。
+- 空结果或歧义结果如何处理。
 
-`skills/business_database.py` decides whether to attach the skill for the current turn. It checks:
+`skills/business_database.py` 决定当前轮是否注入该 Skill，检查项包括：
 
-- Business keywords such as inventory, stock, order, shipment, product, SKU, and their Chinese equivalents.
-- SKU-like or order-number-like identifiers.
-- Private Lark chat context.
-- User allowlist from environment variables.
+- 库存、现货、订单、发货、商品、产品、SKU 等中英文关键词。
+- 类 SKU 或订单号的标识符。
+- 飞书私聊上下文。
+- 环境变量中的用户白名单。
 
-The rendered skill is inserted as a temporary system message for one agent run. It is not written to conversation memory, so later turns receive it only if they independently match the activation rules.
+Skill 会作为临时 system message 插入当前 Agent run，不写入对话记忆。后续轮次只有再次命中激活规则才会重新注入。
 
-## Business Database Tool Boundaries
+## 业务数据库工具边界
 
-Business database MCP tools are visible only when the current request is an authorized private-chat request. The assistant sends structured parameters to fixed MCP tools and does not generate SQL.
+业务数据库 MCP 工具只在授权私聊请求中可见。Agent 向固定 MCP 工具传结构化参数，不生成 SQL。
 
-Before a business database MCP call is sent, `agent/tools/business_guards.py` checks:
+调用业务数据库 MCP 前，`agent/tools/business_guards.py` 会检查：
 
-- Query time window, default 30 days.
-- Per-user rate limit, default 3 calls per 60 seconds.
-- Optional Redis-backed rate limiting.
-- Basic date-range validity.
+- 查询时间窗口，默认 30 天。
+- 单用户调用频率，默认 60 秒 3 次。
+- 可选 Redis 跨进程限流。
+- 日期范围合法性。
 
-These checks remain in code even when the Markdown skill asks the assistant to clarify first.
+即使 Markdown Skill 已要求 Agent 先澄清，最终限制仍由代码执行。
 
-## Memory
+## 对话记忆
 
-Conversation memory has separate views:
+对话记忆分为两个视图：
 
-- Rewrite context: short recent history for resolving references such as "that one" or "the previous document".
-- Answer context: summary plus recent turns for coherent multi-turn answers.
+- 改写上下文：短历史，用于处理“这个”“刚才那个”等指代。
+- 回答上下文：摘要加最近轮次，用于保持多轮回答连贯。
 
-Runtime skills are intentionally excluded from memory to avoid long-term prompt drift.
-
+运行时 Skill 不进入 memory，避免长期 prompt 偏移。

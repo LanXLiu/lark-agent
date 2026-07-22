@@ -1,37 +1,36 @@
 # Assistant Skills
 
-This directory stores Markdown runtime skills used by Lark Agent.
+本目录保存 Lark Agent 的 Markdown 运行时 Skill。
 
-Skills describe workflow behavior for a tool family: when it applies, which fields must be clarified, which values must not be guessed, and how the assistant should answer after a tool returns data.
+Skill 用来描述某类工具工作流：什么时候适用、哪些字段必须追问、哪些值不能猜、工具返回后应该如何回答。
 
-The files here are safe to commit. They should contain workflow rules, examples, and answer policy only. Runtime addresses, API keys, user allowlists, database credentials, and MCP endpoints stay in environment variables.
+这些文件可以提交到仓库。它们只应包含工作流规则、示例和回答规范。运行时地址、API key、用户白名单、数据库凭据和 MCP endpoint 都应放在环境变量中。
 
-## Current Skills
+## 当前 Skill
 
-| Skill | Purpose |
+| Skill | 作用 |
 | --- | --- |
-| [`business_database_mcp.md`](business_database_mcp.md) | Guides business database MCP calls for inventory, order, and product lookup workflows. |
+| [`business_database_mcp.md`](business_database_mcp.md) | 指导库存、订单、商品查询等业务数据库 MCP 调用流程。 |
 
-## Runtime Activation
+## 运行时激活
 
-`business_database.py` performs lightweight keyword and identifier detection. When an authorized private-chat request looks like inventory, order, or product lookup, the loader renders `business_database_mcp.md` into a temporary system message for that one agent run.
+`business_database.py` 负责轻量关键词和标识符检测。当授权私聊请求像是库存、订单或商品查询时，loader 会把 `business_database_mcp.md` 渲染为临时 system message，注入当前 Agent run。
 
-The rendered skill is not stored in conversation memory. After the current answer finishes, later turns only receive the skill again if they independently match the activation rules.
+渲染后的 Skill 不会写入对话记忆。本轮回答结束后，后续轮次只有再次命中激活规则才会重新获得该 Skill。
 
-## Division Of Responsibility
+## 职责划分
 
-The Markdown skill guides the assistant:
+Markdown Skill 指导 Agent：
 
-- Ask for missing SKU, order number, product keyword, warehouse, or date range.
-- Avoid guessing business identifiers.
-- Prefer exact identifiers over broad text.
-- Answer only from returned business rows.
+- 缺 SKU、订单号、商品关键词、仓库或日期范围时先追问。
+- 避免猜测业务标识符。
+- 优先使用精确标识符，而不是宽泛描述。
+- 只根据业务数据库返回的 rows 作答。
 
-Code still enforces final boundaries:
+代码继续执行最终边界：
 
-- Lark private chat only for business database tools.
-- User allowlist from environment variables.
-- Maximum query window, currently 30 days by default.
-- Per-user rate limit, currently 3 calls per 60 seconds by default.
-- Structured MCP arguments only; the agent does not send SQL.
-
+- 业务数据库工具仅限飞书私聊。
+- 用户白名单从环境变量读取。
+- 单次查询时间窗口默认最多 30 天。
+- 单用户默认 60 秒最多 3 次业务查询。
+- Agent 只发送结构化 MCP 参数，不发送 SQL。

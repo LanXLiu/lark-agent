@@ -1,27 +1,26 @@
 # API
 
-`app/api` contains optional FastAPI endpoints for systems that need HTTP access to recall, embedding, or document conversion.
+`app/api` 保存可选 FastAPI 接口，供需要通过 HTTP 调用召回、向量化或文档转换能力的外部系统使用。
 
-The Lark bot path does not depend on this API. It calls the assistant and retrieval stack in-process.
+飞书 bot 主链路不依赖这个 API，而是在进程内直接调用 assistant 和 retrieval。
 
-## Start
+## 启动
 
 ```powershell
 uvicorn app.api.main:app --port <port>
 ```
 
-## Routes
+## 路由
 
-| Prefix | Source | Purpose |
+| 前缀 | 来源 | 作用 |
 | --- | --- | --- |
-| `/recall` | `routers/recall.py` | Hybrid knowledge retrieval |
-| `/embed` | `routers/embedding.py` | Text embedding |
-| `/convert` | `routers/convert.py` | File-to-Markdown conversion when enabled by config |
-| `/health` | `main.py` | Health check |
+| `/recall` | `routers/recall.py` | 混合知识库检索 |
+| `/embed` | `routers/embedding.py` | 文本向量化 |
+| `/convert` | `routers/convert.py` | 配置开启时提供文件转 Markdown |
+| `/health` | `main.py` | 健康检查 |
 
-## Structure
+## 结构
 
-- `main.py`: application entry and router mounting.
-- `routers/`: endpoint implementations.
-- `schemas/`: Pydantic request and response models.
-
+- `main.py`：应用入口和 router 挂载。
+- `routers/`：接口实现。
+- `schemas/`：Pydantic 请求和响应模型。

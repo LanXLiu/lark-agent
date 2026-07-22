@@ -1,24 +1,23 @@
 # MCP Servers
 
-This directory contains runnable Streamable HTTP MCP services.
+本目录包含可独立运行的 Streamable HTTP MCP 服务。
 
-| Module | Responsibility |
+| 模块 | 职责 |
 | --- | --- |
-| `business_db.py` | Publishes inventory, order status, and product lookup tools |
-| `web_search.py` | Publishes public web search and webpage reading tools |
+| `business_db.py` | 发布库存、订单状态和商品查询工具 |
+| `web_search.py` | 发布公开网页搜索和网页正文读取工具 |
 
-## Start
+## 启动
 
 ```powershell
 python -m infrastructure.mcp.servers.business_db
 python -m infrastructure.mcp.servers.web_search
 ```
 
-Server host, port, path, auth, backend connection, and tool allowlists are all read from environment variables.
+服务 host、port、path、鉴权、后端连接和工具白名单全部从环境变量读取。
 
-## Boundary
+## 边界
 
-These services are independent from the current Lark Agent runtime. Lark Agent consumes them through `app/assistant/agent/tools/mcp_tools.py`, and other agents or projects can connect with their own MCP clients.
+这些服务独立于当前 Lark Agent 运行时。Lark Agent 通过 `app/assistant/agent/tools/mcp_tools.py` 消费它们，其他 Agent 或项目也可以用自己的 MCP 客户端连接。
 
-Business database connection settings and query templates must stay outside this directory unless they are local examples without real values.
-
+业务数据库连接配置和查询模板不应保存在本目录，除非只是没有真实值的本地示例。

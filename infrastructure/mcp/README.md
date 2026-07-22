@@ -1,73 +1,72 @@
 # MCP
 
-This directory contains the MCP clients, auth helpers, configuration helpers, backend adapters, and server entry points used by Lark Agent.
+本目录包含 Lark Agent 使用的 MCP 客户端、鉴权、配置工具、后端适配和服务入口。
 
-The project intentionally keeps the external MCP surface small:
+项目刻意保持外部 MCP 面较小：
 
-| Service | Tools |
+| 服务 | 工具 |
 | --- | --- |
-| Business database MCP | `inventory_lookup`, `inventory_batch_lookup`, `order_status`, `product_lookup` |
-| Search/web MCP | `web_search`, `web_fetch` |
+| 业务数据库 MCP | `inventory_lookup`、`inventory_batch_lookup`、`order_status`、`product_lookup` |
+| 搜索/网页 MCP | `web_search`、`web_fetch` |
 
-## Start Services
+## 启动服务
 
 ```powershell
 python -m infrastructure.mcp.servers.business_db
 python -m infrastructure.mcp.servers.web_search
 ```
 
-Both services provide:
+两个服务都提供：
 
-- `GET /health`: health check and exposed tool list.
-- MCP Streamable HTTP endpoint at the path configured by environment variables.
-- Optional API-key auth through `Authorization: Bearer <key>` or `X-API-Key`.
+- `GET /health`：健康检查和已暴露工具列表。
+- MCP Streamable HTTP endpoint：路径由环境变量配置。
+- 可选 API key 鉴权：支持 `Authorization: Bearer <key>` 或 `X-API-Key`。
 
-## Business Database MCP
+## 业务数据库 MCP
 
-The assistant does not submit SQL. It calls fixed business operations with structured arguments:
+Agent 不提交 SQL，只用结构化参数调用固定业务操作：
 
-- `inventory_lookup`: current inventory for one SKU.
-- `inventory_batch_lookup`: current inventory for several SKUs.
-- `order_status`: current state and milestones for one order.
-- `product_lookup`: product lookup by name, SKU, keyword, or category.
+- `inventory_lookup`：查询单个 SKU 当前库存。
+- `inventory_batch_lookup`：批量查询多个 SKU 当前库存。
+- `order_status`：查询单个订单状态和节点。
+- `product_lookup`：按名称、SKU、关键词或分类查商品。
 
-Supported backends:
+支持两种后端：
 
-1. `BUSINESS_DB_BACKEND=http`: recommended for a real business database service. MCP posts `operation`, `arguments`, and `max_rows` to `BUSINESS_DB_QUERY_API_URL`; your database project executes the prepared query and returns `{"rows": [...]}`.
-2. `BUSINESS_DB_BACKEND=sqlite`: local development/demo mode. It uses `BUSINESS_DB_SQLITE_PATH` and a private query config file. SQLite is opened in read-only mode and query templates accept only a single `SELECT` or CTE statement.
+1. `BUSINESS_DB_BACKEND=http`：推荐用于真实业务数据库服务。MCP 将 `operation`、`arguments`、`max_rows` POST 到 `BUSINESS_DB_QUERY_API_URL`，由你的数据库项目执行封装好的查询并返回 `{"rows": [...]}`。
+2. `BUSINESS_DB_BACKEND=sqlite`：本地开发/演示模式。使用 `BUSINESS_DB_SQLITE_PATH` 和私有查询配置文件。SQLite 以只读模式打开，查询模板只接受单条 `SELECT` 或 CTE。
 
-When your SQL Server side is ready, implement the four operation names in your database project and point `BUSINESS_DB_QUERY_API_URL` to it. The Lark Agent does not need table schema or SQL in its prompt.
+等 SQL Server 侧准备好后，只需要在数据库项目中实现这四个 operation，并把 `BUSINESS_DB_QUERY_API_URL` 指向它。Lark Agent 不需要知道表结构，也不需要在 prompt 中写 SQL。
 
-## Business Tool Guards
+## 业务工具 Guard
 
-Agent-side guards run before business database MCP calls:
+业务数据库 MCP 调用前会执行 Agent 侧 guard：
 
-- Private chat and user allowlist are checked before tools are exposed.
-- Group mentions never expose business database MCP tools.
-- Structured parameters are checked before forwarding to MCP.
-- Query date windows are limited to `BUSINESS_DB_QUERY_MAX_WINDOW_DAYS`, default 30.
-- Each user is limited by `BUSINESS_DB_QUERY_RATE_LIMIT_COUNT` per `BUSINESS_DB_QUERY_RATE_LIMIT_WINDOW_SECONDS`, default 3 calls per 60 seconds.
-- `BUSINESS_DB_QUERY_GUARD_REDIS_URL` enables Redis-backed rate limiting; otherwise the process uses an in-memory fallback.
+- 工具暴露前检查私聊和用户白名单。
+- 群聊 @ 场景不暴露业务数据库工具。
+- 转发到 MCP 前检查结构化参数。
+- 查询日期窗口由 `BUSINESS_DB_QUERY_MAX_WINDOW_DAYS` 控制，默认 30 天。
+- 单用户调用频率由 `BUSINESS_DB_QUERY_RATE_LIMIT_COUNT` 和 `BUSINESS_DB_QUERY_RATE_LIMIT_WINDOW_SECONDS` 控制，默认 60 秒 3 次。
+- 配置 `BUSINESS_DB_QUERY_GUARD_REDIS_URL` 后使用 Redis 做跨进程限流；未配置时使用进程内兜底。
 
-The Markdown runtime skill in `app/assistant/skills/business_database_mcp.md` guides clarification before tool use, but these code guards remain the final enforcement layer.
+`app/assistant/skills/business_database_mcp.md` 中的 Markdown Skill 负责指导调用前澄清，但这些代码 guard 仍是最终执行层。
 
-## Search/Web MCP
+## 搜索/网页 MCP
 
-`web_search` uses Tavily-compatible environment variables. `web_fetch` reads public webpage text and rejects:
+`web_search` 使用 Tavily 兼容环境变量。`web_fetch` 读取公开网页正文，并拒绝：
 
-- Local or private network addresses.
-- Credential-bearing URLs.
-- Non-text responses.
-- Oversized responses beyond configured limits.
+- 本地或内网地址。
+- 带凭据的 URL。
+- 非文本响应。
+- 超出配置大小的响应。
 
-## Agent Switches
+## Agent 开关
 
-Set `MCP_ENABLED=true` to register business database tools. Set `WEB_MCP_ENABLED=true` as well to expose `web_search` and `web_fetch` to the agent.
+设置 `MCP_ENABLED=true` 后注册业务数据库工具。再设置 `WEB_MCP_ENABLED=true` 后，Agent 可以看到 `web_search` 和 `web_fetch`。
 
-Tool allowlists are controlled by:
+工具白名单由以下变量控制：
 
 - `BUSINESS_DB_MCP_ALLOW_TOOLS`
 - `WEB_MCP_ALLOW_TOOLS`
 
-Runtime endpoints, API keys, host, port, path, backend connection, and limits are documented in [infrastructure/conf/README.md](../conf/README.md).
-
+运行时 endpoint、API key、host、port、path、后端连接和限制项见 [infrastructure/conf/README.md](../conf/README.md)。
