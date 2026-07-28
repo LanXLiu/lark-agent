@@ -64,3 +64,23 @@ def test_chat_raises_when_choices_are_missing(monkeypatch):
         assert False, "应抛 RuntimeError"
     except RuntimeError:
         pass
+
+
+def test_chat_stream_collects_deltas(monkeypatch):
+    captured = {}
+
+    def fake_post_sse(url, payload, *, api_key, timeout_seconds):
+        captured["payload"] = payload
+        yield "你"
+        yield "好"
+
+    monkeypatch.setattr(llm_mod, "post_sse", fake_post_sse)
+    deltas = []
+    out = _client().chat_stream(
+        messages=[{"role": "user", "content": "q"}],
+        on_delta=lambda delta, full: deltas.append((delta, full)),
+    )
+
+    assert captured["payload"]["stream"] is True
+    assert out == {"role": "assistant", "content": "你好"}
+    assert deltas == [("你", "你"), ("好", "你好")]

@@ -6,6 +6,7 @@ import queue
 import re
 import sys
 import threading
+import uuid
 from collections import OrderedDict
 from typing import Any
 
@@ -22,13 +23,24 @@ from app.assistant.memory import (
 )
 from app.assistant.qa_service import format_answer_with_sources
 from app.assistant.factory import build_agent_service
-from app.channels.lark.feedback import FEEDBACK_ACTION, build_feedback_card, record_feedback
+from app.channels.lark.feedback import FEEDBACK_ACTION
+from app.channels.lark.feedback import STREAMING_ANSWER_ELEMENT_ID
+from app.channels.lark.feedback import build_feedback_card
+from app.channels.lark.feedback import build_streaming_answer_card
+from app.channels.lark.feedback import build_streaming_final_card
+from app.channels.lark.feedback import record_feedback
+from app.channels.lark.feedback import StreamingCardThrottler
 from app.channels.lark.lark_api import LarkApiError
 from app.channels.lark.lark_api import add_message_reaction
+from app.channels.lark.lark_api import create_card_entity
+from app.channels.lark.lark_api import extract_card_id
 from app.channels.lark.lark_api import get_bot_open_id
 from app.channels.lark.lark_api import get_tenant_access_token
 from app.channels.lark.lark_api import reply_card_to_message
+from app.channels.lark.lark_api import reply_card_entity_to_message
 from app.channels.lark.lark_api import send_text_message_to_chat
+from app.channels.lark.lark_api import update_card_entity
+from app.channels.lark.lark_api import update_card_markdown_element
 from app.assistant.llm_client import BailianChatClient
 from app.channels.lark.observability import QaTrace
 from app.channels.lark.relay import build_relay_payload, post_to_enterprise_server
@@ -210,6 +222,139 @@ def _reject_busy(payload: dict[str, Any], settings: Settings) -> None:
         threading.Thread(target=_send, name="lark-reject", daemon=True).start()
 
 
+def _create_streaming_answer_card(
+    settings: Settings,
+    tenant_token: str,
+    message_id: str | None,
+) -> str | None:
+    if not settings.lark_streaming_card_enabled or not message_id:
+        return None
+    try:
+        response = create_card_entity(
+            settings.lark_open_api_base_url,
+            tenant_token,
+            build_streaming_answer_card("正在处理你的问题..."),
+            timeout_seconds=settings.forward_timeout_seconds,
+        )
+        card_id = extract_card_id(response)
+        if not card_id:
+            raise LarkApiError(f"missing card_id in create card response: {response}")
+        reply_card_entity_to_message(
+            settings.lark_open_api_base_url,
+            tenant_token,
+            message_id,
+            card_id,
+            timeout_seconds=settings.forward_timeout_seconds,
+        )
+        return card_id
+    except Exception:  # noqa: BLE001
+        LOGGER.warning("创建飞书流式卡片失败，将回退到普通回复: message_id=%s", message_id)
+        return None
+
+
+def _finalize_streaming_answer_card(
+    settings: Settings,
+    tenant_token: str,
+    card_id: str | None,
+    answer_text: str,
+    *,
+    trace_id: str | None = None,
+    asker_open_id: str | None = None,
+    already_streamed: bool = False,
+) -> bool:
+    if not card_id:
+        return False
+    update_uuid = str(uuid.uuid4())
+    sequence = 1
+    throttler = StreamingCardThrottler(
+        min_interval_seconds=settings.lark_streaming_card_flush_interval_seconds,
+        min_delta_chars=settings.lark_streaming_card_min_delta_chars,
+    )
+    try:
+        if not already_streamed:
+            for prefix in throttler.iter_prefixes(
+                answer_text,
+                settings.lark_streaming_card_chunk_chars,
+            ):
+                update_card_markdown_element(
+                    settings.lark_open_api_base_url,
+                    tenant_token,
+                    card_id,
+                    STREAMING_ANSWER_ELEMENT_ID,
+                    prefix,
+                    sequence=sequence,
+                    uuid=update_uuid,
+                    timeout_seconds=settings.forward_timeout_seconds,
+                )
+                sequence += 1
+        update_card_entity(
+            settings.lark_open_api_base_url,
+            tenant_token,
+            card_id,
+            build_streaming_final_card(answer_text, trace_id, asker_open_id),
+            sequence=sequence,
+            uuid=update_uuid,
+            timeout_seconds=settings.forward_timeout_seconds,
+        )
+        return True
+    except Exception:  # noqa: BLE001
+        LOGGER.warning("更新飞书流式卡片失败，将回退到普通回复: card_id=%s", card_id)
+        return False
+
+
+def _make_lark_stream_callback(
+    settings: Settings,
+    tenant_token: str,
+    card_id: str | None,
+) -> tuple[Any | None, dict[str, bool]]:
+    if not card_id:
+        return None, {"answer_streamed": False}
+
+    state = {"sequence": 1, "answer_streamed": False}
+    update_uuid = str(uuid.uuid4())
+    throttler = StreamingCardThrottler(
+        min_interval_seconds=settings.lark_streaming_card_flush_interval_seconds,
+        min_delta_chars=settings.lark_streaming_card_min_delta_chars,
+    )
+
+    def _update(content: str, *, force: bool = False) -> None:
+        if not force and not throttler.should_flush(content):
+            return
+        if not force:
+            throttler.wait_for_next_flush()
+        update_card_markdown_element(
+            settings.lark_open_api_base_url,
+            tenant_token,
+            card_id,
+            STREAMING_ANSWER_ELEMENT_ID,
+            content,
+            sequence=state["sequence"],
+            uuid=update_uuid,
+            timeout_seconds=settings.forward_timeout_seconds,
+        )
+        state["sequence"] += 1
+        throttler.mark_flushed(content)
+
+    def _callback(event: dict[str, Any]) -> None:
+        kind = event.get("event")
+        if kind == "status":
+            _update(str(event.get("text") or "正在处理..."), force=True)
+            return
+        if kind == "tool_start" or kind == "tool_end":
+            _update(str(event.get("text") or "正在处理..."), force=True)
+            return
+        if kind == "answer_stream_start":
+            _update(str(event.get("text") or "正在生成答案..."), force=True)
+            return
+        if kind == "answer_delta":
+            content = str(event.get("content") or "")
+            if content:
+                state["answer_streamed"] = True
+                _update(content)
+
+    return _callback, state
+
+
 def handle_rag_question(
     payload: dict[str, Any],
     question: str,
@@ -217,6 +362,7 @@ def handle_rag_question(
 ) -> None:
     chat_id = payload["message"].get("chat_id")
     message_id = payload["message"].get("message_id")
+    chat_type = payload["message"].get("chat_type")
     user_open_id = (payload.get("sender") or {}).get("open_id")
     trace = QaTrace(chat_id, user_open_id, question)
 
@@ -278,6 +424,12 @@ def handle_rag_question(
         trace.finish()
         return
 
+    stream_card_id = _create_streaming_answer_card(settings, tenant_token, message_id)
+    stream_callback, stream_state = _make_lark_stream_callback(
+        settings,
+        tenant_token,
+        stream_card_id,
+    )
     answer_text = ""
     has_answer = False  # 仅「成功有答案」时发带反馈按钮的卡片
     conv_key = make_conv_key(chat_id, user_open_id)
@@ -294,18 +446,26 @@ def handle_rag_question(
             user_open_id=user_open_id,
             chat_id=chat_id,
             chat_type=chat_type,
+            event_callback=stream_callback,
         )
 
         # 意图分类判为闲聊/问机器人自身：回一句话术，不带来源、不入多轮记忆（图内已跳过召回/生成）
         if getattr(result, "is_chitchat", False):
-            send_text_message_to_chat(
-                settings.lark_open_api_base_url,
+            if not _finalize_streaming_answer_card(
+                settings,
                 tenant_token,
-                chat_id,
+                stream_card_id,
                 result.answer,
-                timeout_seconds=settings.forward_timeout_seconds,
-                reply_to_message_id=message_id,
-            )
+                already_streamed=stream_state["answer_streamed"],
+            ):
+                send_text_message_to_chat(
+                    settings.lark_open_api_base_url,
+                    tenant_token,
+                    chat_id,
+                    result.answer,
+                    timeout_seconds=settings.forward_timeout_seconds,
+                    reply_to_message_id=message_id,
+                )
             trace.set_stage("chitchat")
             trace.finish()
             LOGGER.info("闲聊拦截（图 route 节点）：message_id=%s", message_id)
@@ -375,7 +535,17 @@ def handle_rag_question(
 
     # 成功有答案：发带 👍/👎 反馈按钮的卡片；其余情况发纯文本
     sent_as_card = False
-    if has_answer and message_id:
+    if stream_card_id:
+        sent_as_card = _finalize_streaming_answer_card(
+            settings,
+            tenant_token,
+            stream_card_id,
+            answer_text,
+            trace_id=trace.trace_id if has_answer else None,
+            asker_open_id=user_open_id if has_answer else None,
+            already_streamed=stream_state["answer_streamed"],
+        )
+    if has_answer and message_id and not sent_as_card:
         try:
             card = build_feedback_card(answer_text, trace.trace_id, user_open_id)
             reply_card_to_message(

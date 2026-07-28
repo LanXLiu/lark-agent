@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, Callable, Iterator
 
 from knowledge.utils.retry import retry_call
 
@@ -93,6 +93,38 @@ class BailianChatClient:
             raise RuntimeError(f"LLM returned no choices: {response}")
         return choices[0].get("message") or {}
 
+    def chat_stream(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        temperature: float = 0.2,
+        on_delta: Callable[[str, str], None] | None = None,
+    ) -> dict[str, Any]:
+        """Stream assistant content from an OpenAI-compatible SSE endpoint.
+
+        This is intentionally used only for the final no-tool answer step. Tool
+        call streaming has provider-specific edge cases, while the final answer
+        is plain text and can be rendered safely into the Lark card.
+        """
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": True,
+        }
+        content_parts: list[str] = []
+        for delta in post_sse(
+            f"{self.base_url}/chat/completions",
+            payload,
+            api_key=self.api_key,
+            timeout_seconds=self.timeout_seconds,
+        ):
+            if delta:
+                content_parts.append(delta)
+                if on_delta:
+                    on_delta(delta, "".join(content_parts))
+        return {"role": "assistant", "content": "".join(content_parts).strip()}
+
 
 def post_json(
     url: str,
@@ -127,3 +159,50 @@ def post_json(
         return json.loads(body)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"LLM returned non-JSON response: {body}") from exc
+
+
+def post_sse(
+    url: str,
+    payload: dict[str, Any],
+    *,
+    api_key: str,
+    timeout_seconds: float,
+) -> Iterator[str]:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json; charset=utf-8",
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "text/event-stream",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            yield from _iter_sse_deltas(response)
+    except urllib.error.HTTPError as exc:
+        err_body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"LLM stream request failed: {exc.code} {exc.reason}; body={err_body}") from exc
+
+
+def _iter_sse_deltas(response) -> Iterator[str]:
+    for raw_line in response:
+        line = raw_line.decode("utf-8", errors="replace").strip()
+        if not line or not line.startswith("data:"):
+            continue
+        data = line.removeprefix("data:").strip()
+        if data == "[DONE]":
+            break
+        try:
+            event = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        choices = event.get("choices") or []
+        if not choices:
+            continue
+        delta = choices[0].get("delta") or {}
+        content = delta.get("content")
+        if content:
+            yield str(content)

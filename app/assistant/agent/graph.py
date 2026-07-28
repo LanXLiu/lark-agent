@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, TypedDict
+from typing import Any, Callable, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
@@ -49,6 +49,7 @@ class AgentState(TypedDict, total=False):
     final_answer: str
     web_sources: list[dict[str, str]]
     llm_ms: float
+    event_callback: Callable[[dict[str, Any]], None] | None
 
 
 def _strip_reasoning(msg: dict[str, Any]) -> dict[str, Any]:
@@ -89,6 +90,26 @@ def _last_user_question(messages: list[dict[str, Any]]) -> str:
     return ""
 
 
+def _emit(state: AgentState, event: str, **payload: Any) -> None:
+    callback = state.get("event_callback")
+    if not callback:
+        return
+    try:
+        callback({"event": event, **payload})
+    except Exception:  # noqa: BLE001 -- UI progress must never break answering.
+        logger.warning("[Agent] event callback failed: {}", event)
+
+
+def _tool_status_text(name: str, *, starting: bool, hit_count: int | None = None) -> str:
+    if name == "search_knowledge":
+        return "正在检索知识库..." if starting else f"知识库检索完成，找到 {hit_count or 0} 条相关内容。"
+    if name == "web_search":
+        return "正在搜索公开网页..." if starting else f"网页搜索完成，找到 {hit_count or 0} 条结果。"
+    if name in {"inventory_lookup", "inventory_batch_lookup", "order_status", "product_lookup"}:
+        return "正在查询业务数据..." if starting else "业务数据查询完成，正在组织答案。"
+    return f"正在调用工具 {name}..." if starting else f"工具 {name} 调用完成。"
+
+
 class AgentService:
     """LangGraph 编排的 Agent 问答服务。对外 answer() 返回 QaAnswer(与旧版兼容)。"""
 
@@ -121,15 +142,35 @@ class AgentService:
 
     def _node_agent(self, state: AgentState) -> dict[str, Any]:
         rnd = state.get("round", 0)
-        last = rnd >= self.max_tool_rounds - 1
+        has_tool_results = any(m.get("role") == "tool" for m in state.get("messages") or [])
+        last = rnd >= self.max_tool_rounds - 1 or (
+            bool(state.get("event_callback")) and has_tool_results
+        )
         tool_context = state.get("tool_context")
         tool_schemas = registry.tool_schemas(tool_context)
-        t0 = time.perf_counter()
-        msg = self.llm.chat(
-            messages=state["messages"],
-            tools=None if last else tool_schemas,
-            tool_choice="none" if last else "auto",
+        _emit(
+            state,
+            "status",
+            text="正在组织最终答案..." if last else "正在理解问题并选择合适的工具...",
         )
+        t0 = time.perf_counter()
+        if last and state.get("event_callback"):
+            _emit(state, "answer_stream_start", text="正在生成答案...")
+            msg = self.llm.chat_stream(
+                messages=state["messages"],
+                on_delta=lambda delta, full: _emit(
+                    state,
+                    "answer_delta",
+                    delta=delta,
+                    content=full,
+                ),
+            )
+        else:
+            msg = self.llm.chat(
+                messages=state["messages"],
+                tools=None if last else tool_schemas,
+                tool_choice="none" if last else "auto",
+            )
         llm_ms = (state.get("llm_ms") or 0.0) + (time.perf_counter() - t0) * 1000.0
         new_messages = state["messages"] + [_strip_reasoning(msg)]
         return {"messages": new_messages, "round": rnd + 1, "llm_ms": llm_ms}
@@ -159,8 +200,16 @@ class AgentService:
                                  "content": f"[参数解析失败，请修正后重试：{raw_args}]"})
                 continue
             logger.info("[Agent] 第{}轮 调用工具 {} 参数={}", rnd, name, args)
+            _emit(state, "tool_start", name=name, text=_tool_status_text(name, starting=True))
             res = registry.execute(name, args, ctx)
             logger.info("[Agent] 第{}轮 工具 {} 返回 {} 条命中", rnd, name, len(res.hits))
+            _emit(
+                state,
+                "tool_end",
+                name=name,
+                hit_count=len(res.hits),
+                text=_tool_status_text(name, starting=False, hit_count=len(res.hits)),
+            )
             if name == "search_knowledge":
                 searched = True  # 标记本次会话确实检索过知识库(用于区分闲聊 vs 拒答)
             all_hits.extend(res.hits)
@@ -169,6 +218,7 @@ class AgentService:
         return {"messages": messages, "all_hits": all_hits, "searched": searched}
 
     def _node_finalize(self, state: AgentState) -> dict[str, Any]:
+        _emit(state, "status", text="正在整理引用来源和最终回复...")
         # 取最后一条 assistant 文本
         text = ""
         for m in reversed(state["messages"]):
@@ -264,6 +314,7 @@ class AgentService:
         user_open_id: str | None = None,
         chat_id: str | None = None,
         chat_type: str | None = None,
+        event_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> QaAnswer:
         """对外问答入口，返回 QaAnswer。
 
@@ -290,6 +341,7 @@ class AgentService:
             "all_hits": [],
             "round": 0,
             "tool_context": tool_context,
+            "event_callback": event_callback,
         }
         final: AgentState = self._graph.invoke(init)
 

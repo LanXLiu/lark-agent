@@ -7,13 +7,13 @@
 | 路径 | 职责 |
 | --- | --- |
 | `factory.py` | 运行时装配入口，创建 LLM 客户端、检索器和 `AgentService`。 |
-| `agent/graph.py` | Agent 循环：携带 tools 调 LLM、执行工具、组装最终答案、联网降级和工具轮次限制。 |
+| `agent/graph.py` | Agent 循环：携带 tools 调 LLM、执行工具、组装最终答案、联网降级、工具轮次限制和流式事件回调。 |
 | `agent/tools/` | 工具抽象、注册表、知识库检索、时间工具、MCP 代理、网页搜索和业务查询 guard。 |
 | `skills/` | Markdown 运行时 Skill 和激活逻辑；当前 Skill 用于指导业务数据库 MCP 调用。 |
 | `qa_service.py` | 统一回答结构、来源格式化和拒答辅助逻辑。 |
 | `memory.py` | 对话记忆窗口、摘要和上下文构建。 |
 | `memory_store.py` | 可选 SQLite 对话记忆持久化。 |
-| `llm_client.py` | 支持工具调用和重试的聊天客户端。 |
+| `llm_client.py` | 支持工具调用、重试和 SSE 文本流式输出的聊天客户端。 |
 | `prompts/` | 系统提示词和 prompt 构建函数。 |
 
 ## Agent 流程
@@ -24,11 +24,13 @@
   -> 命中规则时为本轮附加运行时 Skill
   -> LLM 判断是否调用工具
   -> 执行被选中的工具
-  -> 直到没有工具调用或达到轮次上限
+  -> 进入最终作答阶段
   -> 组装答案和来源
 ```
 
 本项目不在每个问题前跑一个大型固定意图分类器。主要路由由 Function Calling 完成，代码侧负责控制工具可见性和硬约束。
+
+当渠道传入 `event_callback` 时，Agent 会把“理解问题、调用工具、检索完成、开始生成”等状态发回渠道；最终作答阶段使用 LLM SSE，把答案增量交给渠道侧展示。未传回调时仍走原同步接口。
 
 ## 运行时 Skill
 

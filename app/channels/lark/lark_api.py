@@ -86,6 +86,112 @@ def reply_card_to_message(
     return response
 
 
+def create_card_entity(
+    base_url: str,
+    tenant_access_token: str,
+    card: dict[str, Any],
+    *,
+    timeout_seconds: float = 5,
+) -> dict[str, Any]:
+    response = post_json(
+        f"{base_url}/open-apis/cardkit/v1/cards",
+        {
+            "type": "card_json",
+            "data": json.dumps(card, ensure_ascii=False),
+        },
+        headers={"Authorization": f"Bearer {tenant_access_token}"},
+        timeout_seconds=timeout_seconds,
+    )
+    ensure_lark_success(response, "create card entity failed")
+    return response
+
+
+def extract_card_id(response: dict[str, Any]) -> str | None:
+    data = response.get("data") or {}
+    card = data.get("card") if isinstance(data.get("card"), dict) else {}
+    return data.get("card_id") or card.get("card_id")
+
+
+def reply_card_entity_to_message(
+    base_url: str,
+    tenant_access_token: str,
+    message_id: str,
+    card_id: str,
+    *,
+    timeout_seconds: float = 5,
+) -> dict[str, Any]:
+    encoded_message_id = urllib.parse.quote(message_id, safe="")
+    response = post_json(
+        f"{base_url}/open-apis/im/v1/messages/{encoded_message_id}/reply",
+        {
+            "msg_type": "interactive",
+            "content": json.dumps(
+                {"type": "card", "data": {"card_id": card_id}},
+                ensure_ascii=False,
+            ),
+        },
+        headers={"Authorization": f"Bearer {tenant_access_token}"},
+        timeout_seconds=timeout_seconds,
+    )
+    ensure_lark_success(response, "reply card entity failed")
+    return response
+
+
+def update_card_entity(
+    base_url: str,
+    tenant_access_token: str,
+    card_id: str,
+    card: dict[str, Any],
+    *,
+    sequence: int,
+    uuid: str,
+    timeout_seconds: float = 5,
+) -> dict[str, Any]:
+    encoded_card_id = urllib.parse.quote(card_id, safe="")
+    response = put_json(
+        f"{base_url}/open-apis/cardkit/v1/cards/{encoded_card_id}",
+        {
+            "card": {
+                "type": "card_json",
+                "data": json.dumps(card, ensure_ascii=False),
+            },
+            "sequence": sequence,
+            "uuid": uuid,
+        },
+        headers={"Authorization": f"Bearer {tenant_access_token}"},
+        timeout_seconds=timeout_seconds,
+    )
+    ensure_lark_success(response, "update card entity failed")
+    return response
+
+
+def update_card_markdown_element(
+    base_url: str,
+    tenant_access_token: str,
+    card_id: str,
+    element_id: str,
+    content: str,
+    *,
+    sequence: int,
+    uuid: str,
+    timeout_seconds: float = 5,
+) -> dict[str, Any]:
+    encoded_card_id = urllib.parse.quote(card_id, safe="")
+    encoded_element_id = urllib.parse.quote(element_id, safe="")
+    response = put_json(
+        f"{base_url}/open-apis/cardkit/v1/cards/{encoded_card_id}/elements/{encoded_element_id}/content",
+        {
+            "content": content,
+            "sequence": sequence,
+            "uuid": uuid,
+        },
+        headers={"Authorization": f"Bearer {tenant_access_token}"},
+        timeout_seconds=timeout_seconds,
+    )
+    ensure_lark_success(response, "update card markdown element failed")
+    return response
+
+
 def reply_text_to_message(
     base_url: str,
     tenant_access_token: str,
@@ -421,6 +527,39 @@ def post_json(
     headers: dict[str, str] | None = None,
     timeout_seconds: float = 5,
 ) -> dict[str, Any]:
+    return request_json(
+        "POST",
+        url,
+        payload,
+        headers=headers,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def put_json(
+    url: str,
+    payload: dict[str, Any],
+    *,
+    headers: dict[str, str] | None = None,
+    timeout_seconds: float = 5,
+) -> dict[str, Any]:
+    return request_json(
+        "PUT",
+        url,
+        payload,
+        headers=headers,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def request_json(
+    method: str,
+    url: str,
+    payload: dict[str, Any],
+    *,
+    headers: dict[str, str] | None = None,
+    timeout_seconds: float = 5,
+) -> dict[str, Any]:
     request_headers = {"Content-Type": "application/json; charset=utf-8"}
     if headers:
         request_headers.update(headers)
@@ -429,7 +568,7 @@ def post_json(
         url,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         headers=request_headers,
-        method="POST",
+        method=method,
     )
 
     try:

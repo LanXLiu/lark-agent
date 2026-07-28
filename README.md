@@ -12,6 +12,7 @@ Lark Agent 是一个面向 Lark/飞书的企业 Agent 助手。它可以回答�
 - **搜索/网页 MCP**：封装公开网页搜索与网页正文读取能力。
 - **运行时 Skill**：用 Markdown 沉淀工具调用流程，只有当前问题命中对应场景时才注入本轮上下文。
 - **飞书接入**：支持私聊、群聊 @、消息去重、快速 ack、反馈入口和群文件下载。
+- **飞书流式卡片**：可选启用 JSON 2.0 流式答案卡片，先回复处理中状态，并持续显示理解问题、检索知识库、调用工具和生成答案等阶段；最终答案通过 LLM SSE 边生成边更新到同一张卡片，内置节流器合并过碎输出，降低飞书接口频控风险，并保留反馈入口。
 - **多源文档入库**：支持飞书云文档、PDF、Word、PPT、Excel、图片、JSON、Markdown、纯文本等格式转换、清洗、切片、向量化和写入 Qdrant。
 - **多轮记忆**：支持改写历史、回答上下文窗口、摘要、TTL/LRU 清理和可选 SQLite 持久化。
 - **Redis 能力预留**：支持业务查询限流使用 Redis 做跨进程状态；后续也可扩展问答缓存和轻量队列。
@@ -117,6 +118,7 @@ Copy-Item infrastructure/conf/config_local.yaml.example infrastructure/conf/conf
 常见配置分组：
 
 - 飞书应用凭据。
+- 飞书回复形态：默认普通回复，可通过 `LARK_STREAMING_CARD_ENABLED=true` 开启流式卡片。
 - LLM、embedding、rerank 和可选 OCR/VLM 服务。
 - MinIO 和 Qdrant。
 - Agent 工具轮次、召回阈值和飞书 worker 并发。

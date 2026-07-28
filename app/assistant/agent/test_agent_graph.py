@@ -17,6 +17,21 @@ class _FakeLLM:
         self.calls.append({"tools": tools, "tool_choice": tool_choice})
         return self._script.pop(0)
 
+    def chat_stream(self, *, messages, temperature=0.2, on_delta=None):
+        self.calls.append({"tools": None, "tool_choice": "none", "stream": True})
+        msg = self._script.pop(0)
+        content = msg.get("content") or ""
+        midpoint = max(1, len(content) // 2)
+        parts = [content[:midpoint], content[midpoint:]]
+        full = ""
+        for part in parts:
+            if not part:
+                continue
+            full += part
+            if on_delta:
+                on_delta(part, full)
+        return {"role": "assistant", "content": full}
+
 
 class _FakeRecaller:
     def search(self, request):
@@ -171,3 +186,19 @@ def test_web_search_disabled_keeps_no_answer_when_knowledge_is_insufficient(monk
     ans = svc.answer("什么是RAG")
     assert ans.no_answer is True       # 不降级，直接拒答
     assert ans.web_sources == []
+
+
+def test_event_callback_streams_final_answer_after_tool_call():
+    llm = _FakeLLM([
+        _tool_call_msg("search_knowledge", '{"query": "报销流程"}'),
+        _text_msg("报销需要先提单再审批。"),
+    ])
+    events = []
+    ans = _svc(llm).answer("报销怎么弄", event_callback=events.append)
+
+    assert "报销需要先提单" in ans.answer
+    assert any(event["event"] == "tool_start" for event in events)
+    assert any(event["event"] == "tool_end" for event in events)
+    assert any(event["event"] == "answer_stream_start" for event in events)
+    assert [event["content"] for event in events if event["event"] == "answer_delta"][-1] == ans.answer
+    assert llm.calls[-1]["stream"] is True

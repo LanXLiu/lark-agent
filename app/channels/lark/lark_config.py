@@ -47,6 +47,10 @@ class Settings:
     rag_recall_quality_min: float  # 召回分数阈值：低于它视为召回不足(拒答/降级联网)
     rag_max_tool_rounds: int       # Agent 工具调用循环上限
     rag_enable_web_search: bool    # 知识库召回不足时是否降级联网搜索(需配 TAVILY_API_KEY)
+    lark_streaming_card_enabled: bool
+    lark_streaming_card_chunk_chars: int
+    lark_streaming_card_flush_interval_seconds: float
+    lark_streaming_card_min_delta_chars: int
 
 
 def load_settings(*, require_enterprise_server: bool = True) -> Settings:
@@ -104,6 +108,16 @@ def load_settings(*, require_enterprise_server: bool = True) -> Settings:
         rag_recall_quality_min=float(os.getenv("RAG_RECALL_QUALITY_MIN", "0.68")),
         rag_max_tool_rounds=max(1, int(os.getenv("RAG_MAX_TOOL_ROUNDS", "4"))),
         rag_enable_web_search=parse_bool(os.getenv("RAG_ENABLE_WEB_SEARCH", "true")),
+        lark_streaming_card_enabled=parse_bool(os.getenv("LARK_STREAMING_CARD_ENABLED", "false")),
+        lark_streaming_card_chunk_chars=max(50, int(os.getenv("LARK_STREAMING_CARD_CHUNK_CHARS", "600"))),
+        lark_streaming_card_flush_interval_seconds=max(
+            0.0,
+            float(os.getenv("LARK_STREAMING_CARD_FLUSH_INTERVAL_SECONDS", "0.5")),
+        ),
+        lark_streaming_card_min_delta_chars=max(
+            1,
+            int(os.getenv("LARK_STREAMING_CARD_MIN_DELTA_CHARS", "120")),
+        ),
     )
 
 

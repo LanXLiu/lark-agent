@@ -7,7 +7,7 @@
 | 文件 | 职责 |
 |---|---|
 | `bot.py` | **入口**。长连接客户端；收消息 → 去重 → 快速 ack → 入**有界队列**（削峰）→ 固定 worker 线程用单例 agent助手服务跑问答；卡片按钮回调（反馈）。队列满时返回稍后重试。`python -m app.channels.lark.bot` 启动。 |
-| `lark_api.py` | 飞书 OpenAPI 封装：tenant_access_token、发消息、贴表情、取云文档原生 markdown、群名/文档名查询。 |
+| `lark_api.py` | 飞书 OpenAPI 封装：tenant_access_token、发消息、贴表情、CardKit 流式卡片、取云文档原生 markdown、群名/文档名查询。 |
 | `download.py` | 下载群文档/附件到 MinIO。`python -m app.channels.lark.download` 可单独运行。 |
 | `lark_markdown.py` | 飞书原生 markdown 清洗（反转义、HTML 表格转 md）。 |
 | `feedback.py` | 👍/👎 反馈卡片构造与落盘（群聊多人各记一份）。 |
@@ -19,5 +19,7 @@
 ## 说明
 
 问答不在本模块实现。`bot.py` 通过 `app.assistant.factory` 创建 agent助手服务，本模块只负责飞书侧的收发与文件获取。
+
+**流式卡片**：设置 `LARK_STREAMING_CARD_ENABLED=true` 后，问答会先回复一张飞书 JSON 2.0 卡片显示处理中状态；agent 在理解问题、检索知识库、调用工具、组织答案时会通过事件回调更新同一张卡片。最终作答阶段使用 LLM SSE，把生成中的答案持续写入 markdown 组件，结束后关闭流式模式并保留反馈按钮。答案 delta 会经过节流器，由 `LARK_STREAMING_CARD_FLUSH_INTERVAL_SECONDS` 和 `LARK_STREAMING_CARD_MIN_DELTA_CHARS` 控制，避免把模型过碎输出直接打到飞书接口。若 CardKit 调用失败，会自动回退到原来的普通卡片或文本回复。
 
 **并发兜底**：问答耗时数秒，websocket 回调必须秒 ack（否则飞书重投）。`bot.py` 收消息后立即入有界队列（`RAG_QUEUE_MAXSIZE`），由固定数量 worker（`RAG_WORKER_COUNT`）消费——worker 数即「最多几路并发打百炼」。队列满时对提问优雅回「稍后再试」，而非无限堆积撑爆内存。所有 worker 共用一个启动时建好的单例 Agent 服务（其 `answer` 无共享可变状态，跨线程安全）。

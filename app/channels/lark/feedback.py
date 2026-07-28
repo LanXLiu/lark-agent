@@ -16,14 +16,16 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterator
 
 LOGGER = logging.getLogger(__name__)
 
 # 按钮 value 里的 action 标识，回调时据此识别是反馈点击
 FEEDBACK_ACTION = "qa_feedback"
+STREAMING_ANSWER_ELEMENT_ID = "answer_md"
 
 _FEEDBACK_PATH = Path(__file__).resolve().parent.parent / "logs" / "qa_feedback.jsonl"
 _WRITE_LOCK = threading.Lock()
@@ -72,6 +74,134 @@ def build_feedback_card(answer_text: str, trace_id: str, asker_open_id: str | No
             },
         ],
     }
+
+
+def build_streaming_answer_card(content: str) -> dict[str, Any]:
+    return {
+        "schema": "2.0",
+        "config": {
+            "wide_screen_mode": True,
+            "streaming_mode": True,
+        },
+        "body": {
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "element_id": STREAMING_ANSWER_ELEMENT_ID,
+                    "content": content,
+                }
+            ]
+        },
+    }
+
+
+def build_streaming_final_card(
+    answer_text: str,
+    trace_id: str | None = None,
+    asker_open_id: str | None = None,
+) -> dict[str, Any]:
+    elements: list[dict[str, Any]] = [
+        {
+            "tag": "markdown",
+            "element_id": STREAMING_ANSWER_ELEMENT_ID,
+            "content": answer_text,
+        }
+    ]
+    if trace_id:
+        base_value = {
+            "action": FEEDBACK_ACTION,
+            "trace_id": trace_id,
+            "asker": asker_open_id or "",
+        }
+        elements.extend(
+            [
+                {"tag": "hr"},
+                {
+                    "tag": "button",
+                    "element_id": "feedback_up",
+                    "text": {"tag": "plain_text", "content": "有用"},
+                    "type": "default",
+                    "behaviors": [
+                        {
+                            "type": "callback",
+                            "value": {**base_value, "vote": "up"},
+                        }
+                    ],
+                },
+                {
+                    "tag": "button",
+                    "element_id": "feedback_down",
+                    "text": {"tag": "plain_text", "content": "没用"},
+                    "type": "default",
+                    "behaviors": [
+                        {
+                            "type": "callback",
+                            "value": {**base_value, "vote": "down"},
+                        }
+                    ],
+                },
+            ]
+        )
+
+    return {
+        "schema": "2.0",
+        "config": {
+            "wide_screen_mode": True,
+            "streaming_mode": False,
+        },
+        "body": {"elements": elements},
+    }
+
+
+def iter_streaming_prefixes(text: str, chunk_chars: int) -> list[str]:
+    if not text:
+        return [""]
+    chunk_chars = max(1, chunk_chars)
+    return [text[:index] for index in range(chunk_chars, len(text), chunk_chars)] + [text]
+
+
+class StreamingCardThrottler:
+    def __init__(
+        self,
+        *,
+        min_interval_seconds: float,
+        min_delta_chars: int,
+        clock: Callable[[], float] = time.monotonic,
+        sleeper: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self.min_interval_seconds = max(0.0, min_interval_seconds)
+        self.min_delta_chars = max(1, min_delta_chars)
+        self._clock = clock
+        self._sleeper = sleeper
+        self._last_flush_at: float | None = None
+        self._last_flush_len = 0
+
+    def should_flush(self, text: str, *, force: bool = False) -> bool:
+        if force:
+            return True
+        if self._last_flush_at is None:
+            return True
+        if len(text) - self._last_flush_len < self.min_delta_chars:
+            return False
+        return self._clock() - self._last_flush_at >= self.min_interval_seconds
+
+    def mark_flushed(self, text: str) -> None:
+        self._last_flush_at = self._clock()
+        self._last_flush_len = len(text)
+
+    def wait_for_next_flush(self) -> None:
+        if self._last_flush_at is None or self.min_interval_seconds <= 0:
+            return
+        remaining = self.min_interval_seconds - (self._clock() - self._last_flush_at)
+        if remaining > 0:
+            self._sleeper(remaining)
+
+    def iter_prefixes(self, text: str, chunk_chars: int) -> Iterator[str]:
+        step = max(1, chunk_chars, self.min_delta_chars)
+        for prefix in iter_streaming_prefixes(text, step):
+            self.wait_for_next_flush()
+            self.mark_flushed(prefix)
+            yield prefix
 
 
 def record_feedback(
